@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    "mcp[cli]>=1.0.0,<2.0.0",
     "pymongo>=4.0",
     "psycopg2-binary>=2.9",
     "pymysql>=1.1",
@@ -20,6 +20,10 @@ mongodb-mcp = "src.databases.mongodb_mcp:main"
 mysql-mcp = "src.databases.mysql_mcp:main"
 postgresql-mcp = "src.databases.postgresql_mcp:main"
 sqlite-mcp = "src.databases.sqlite_mcp:main"
+
+[tool.uv.build-backend]
+module-name = "src"
+module-root = ""
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
