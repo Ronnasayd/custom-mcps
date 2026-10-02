@@ -1,87 +1,44 @@
+<!-- INIT:AUTO-GENERATED-CONTEXT:DO-NOT-MODIFY -->
 
-<!-- INIT AUTO-CONTEXT -->
+## Mandatory rules that must always be followed
 
+- Every user question → interactive tool, never plain text. Claude:
+  `AskUserQuestion`. Multiple questions: `grilling` skill.
 
-## Environments
+- When task list exists (multi-step work), use `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` to give user feedback. Mark tasks complete as done, don't batch.
 
-- JS/TS: use `yarn`, not `npm`, unless project says `npm`.
-- Python: use `pip` + `venv`.
-- Multi-language versions: use `asdf` when fit.
+- Whenever you modify a component or screen → run tests using Playwright (or a similar E2E tool) before finalizing.
 
-## Rules
+- Never treat documentation (`markdown files`,`memories`) as absolute truth. Only the implemented code should be treated as the truth.
 
-- Before editing any file, read it first. Before modifying a function, grep for all callers. Research before you edit.
+- Never assume the code is correct without tests to validate it.
 
-## Always Use Interactive Question Tools
+## Commonly used skills
 
-For every user question, use interactive question tool. No exceptions for context, type, or intent.
-
-Use this for clarifications, options, confirmations, preference checks, all user interactions.
-
-- **Claude**: Use `AskUserQuestion`
-- **Other environments**: Use equivalent interactive question tools available in your context
-- **Fallback**: if no interactive tools exist, use labeled options (A, B, C... Z)
-
-If interactive tool exists, never ask plain-text question.
-If there are multiple questions, use the `grilling` skill.
-
-## Task Tracking
-
-When task list exists (multi-step work), use `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` to give user feedback. Mark tasks complete as done, don't batch.
-
-## Code style
-
-- Functions: 4-20 lines. Split if longer.
-- Files: under 500 lines. Split by responsibility.
-- One thing per function, one responsibility per module (SRP).
-- Names: specific and unique. Avoid `data`, `handler`, `Manager`.
-  Prefer names that return <5 grep hits in the codebase.
-- Types: explicit. No `any`, no `Dict`, no untyped functions.
-- No code duplication. Extract shared logic into a function/module.
-- Early returns over nested ifs. Max 2 levels of indentation.
-- Exception messages must include the offending value and expected shape.
-
-## Comments
-
-- Keep your own comments. Don't strip them on refactor — they carry
-  intent and provenance.
-- Write WHY, not WHAT. Skip `// increment counter` above `i++`.
-- Docstrings on public functions: intent + one usage example.
-- Reference issue numbers / commit SHAs when a line exists because
-  of a specific bug or upstream constraint.
-
-## Tests
-
-- Tests run with a single command: `<project-specific>`.
-- Every new function gets a test. Bug fixes get a regression test.
-- Mock external I/O (API, DB, filesystem) with named fake classes,
-  not inline stubs.
-- Tests must be F.I.R.S.T: fast, independent, repeatable,
-  self-validating, timely.
-
-## Dependencies
-
-- Inject dependencies through constructor/parameter, not global/import.
-- Wrap third-party libs behind a thin interface owned by this project.
-
-## Structure
-
-- Follow the framework's convention (Rails, Django, Next.js, etc.).
-- Prefer small focused modules over god files.
-- Predictable paths: controller/model/view, src/lib/test, etc.
-
-## Formatting
-
-- Use the language default formatter (`cargo fmt`, `gofmt`, `prettier`,
-  `black`, `rubocop -A`). Don't discuss style beyond that.
-
-## Logging
-
-- Structured JSON when logging for debugging / observability.
-- Plain text only for user-facing CLI output.
+| When                                                   | Use                                          |
+| ------------------------------------------------------ | -------------------------------------------- |
+| New skill's description doesn't trigger reliably       | `skill-description-generator`                |
+| Writing a commit message                               | `semantic-commit-message` / `caveman-commit` |
+| Opening a PR                                           | `generate-pr-description`                    |
+| Unsure about git workflow (rebase, branch strategy)    | `git-guide` / `git-workflow`                 |
+| Break big/complex problem into sub-problems            | `dynamic-programming-analysis`               |
+| Generate/update project docs from code or diff         | `generate-docs`                              |
+| Write PR description from diff/commits                 | `generate-pr-description`                    |
+| Review a PR                                            | `pr-review`                                  |
+| Judge PR w/ evidence-first review + inline GH comments | `the-judge`                                  |
+| Resolve merge conflicts                                | `resolve-merge-conflicts`                    |
+| Execute tasks for a spec-driven feature (taskmaster)   | `sd-execute`                                 |
+| Generate a plan step-by-step                           | `sd-planning`                                |
+| Build requirements review table from spec/design/tasks | `spec-to-requirements-table`                 |
+| Pick between technical options (pros/cons)             | `technical-decision-helper`                  |
+| Map files/deps/tests a task touches before changing    | `context-map`                                |
 
 ## Context-Specific Rules
 
 The following rules apply to specific file types:
+
 - [code.instructions](.claude/instructions/code.instructions.md) — applies to: `**/*.ts, **/*.js, **/*.py, **/*.java, **/*.go, **/*.css, **/*.cpp, **/*.c, **/*.vue, **/*.jsx, **/*.tsx`
-<!-- END AUTO-CONTEXT -->
+- [python.instructions](.claude/instructions/python.instructions.md) — applies to: `**/*.py`
+- [pydocs.instructions](.claude/instructions/pydocs.instructions.md) — applies to: `**/*.py`
+
+<!-- END:AUTO-GENERATED-CONTEXT:DO-NOT-MODIFY -->
