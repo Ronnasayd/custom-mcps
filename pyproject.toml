@@ -36,3 +36,8 @@ dev = [
     "pytest==9.2.0",
 ]
 
+[tool.mypy]
+python_executable = ".venv/bin/python"
+
+[tool.pylint.main]
+init-hook = 'import glob, sys; sys.path[:0] = glob.glob(".venv/lib/python*/site-packages") + ["."]'
