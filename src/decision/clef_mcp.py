@@ -167,6 +167,87 @@ def clef_decide(
     return _post(model, state, questions)
 
 
+def _ask_one(
+    model: str | None, state: State, question: dict[str, Any]
+) -> dict[str, Any]:
+    """Send one question under the id ``answer`` and project the reply.
+
+    Args:
+        model: Explicit model name, or None for the default.
+        state: Context the question is asked about.
+        question: Typed question body.
+
+    Returns:
+        ``{"answer", "model", "usage"}`` on success, or ``{"error": ...}``.
+    """
+    out = _post(model, state, {"answer": question})
+    if "error" in out:
+        return out
+    answers = out.get("answers")
+    if not isinstance(answers, dict) or "answer" not in answers:
+        return {"error": "Unexpected response shape: result has no answers.answer"}
+    return {
+        "answer": answers["answer"],
+        "model": out.get("model"),
+        "usage": out.get("usage"),
+    }
+
+
+@mcp.tool()
+def clef_choice(
+    state: State, instructions: str, options: dict[str, str], model: str | None = None
+) -> dict[str, Any]:
+    """Pick one option from a labelled set.
+
+    Args:
+        state: Context the question is asked about.
+        instructions: What to decide.
+        options: Map of option label to its description (2-255 options).
+        model: ``clef`` or ``clef-flash``; defaults to CLEF_MODEL, then ``clef``.
+
+    Returns:
+        ``{"answer", "model", "usage"}``, or ``{"error": ...}``.
+    """
+    question = {"type": "choice", "instructions": instructions, "criteria": options}
+    return _ask_one(model, state, question)
+
+
+@mcp.tool()
+def clef_score(
+    state: State, instructions: str, levels: list[str], model: str | None = None
+) -> dict[str, Any]:
+    """Rate the state on an ordered scale.
+
+    Args:
+        state: Context the question is asked about.
+        instructions: What to rate.
+        levels: Ordered level descriptions (2-10 levels).
+        model: ``clef`` or ``clef-flash``; defaults to CLEF_MODEL, then ``clef``.
+
+    Returns:
+        ``{"answer", "model", "usage"}``, or ``{"error": ...}``.
+    """
+    question = {"type": "score", "instructions": instructions, "criteria": levels}
+    return _ask_one(model, state, question)
+
+
+@mcp.tool()
+def clef_noul(
+    state: State, instructions: str, model: str | None = None
+) -> dict[str, Any]:
+    """Estimate the probability that a yes/no statement holds.
+
+    Args:
+        state: Context the question is asked about.
+        instructions: The statement to judge.
+        model: ``clef`` or ``clef-flash``; defaults to CLEF_MODEL, then ``clef``.
+
+    Returns:
+        ``{"answer", "model", "usage"}``, or ``{"error": ...}``.
+    """
+    return _ask_one(model, state, {"type": "noul", "instructions": instructions})
+
+
 def main() -> None:
     """Run the Clef MCP server over stdio."""
     mcp.run()

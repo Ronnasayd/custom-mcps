@@ -176,3 +176,96 @@ def test_unexpected_shape(mock, payload):
     mock(lambda r: httpx.Response(200, json=payload))
     out = clef_mcp.clef_decide("s", QUESTIONS)
     assert "unexpected" in out["error"].lower()
+
+
+SINGLE_RESULT = {
+    "model": "clef",
+    "answers": {"answer": {"label": "b", "p": 0.8}},
+    "usage": {"tokens": 7},
+}
+
+
+def single_ok(request):
+    body = {"success": True, "errors": [], "result": SINGLE_RESULT}
+    return httpx.Response(200, json=body)
+
+
+def sent_questions(request):
+    return json.loads(request.content)["questions"]
+
+
+def test_choice_request(mock):
+    seen = mock(single_ok)
+    clef_mcp.clef_choice("s", "Pick one", {"a": "first", "b": "second"})
+    assert sent_questions(seen[0]) == {
+        "answer": {
+            "type": "choice",
+            "instructions": "Pick one",
+            "criteria": {"a": "first", "b": "second"},
+        }
+    }
+
+
+def test_score_request(mock):
+    seen = mock(single_ok)
+    clef_mcp.clef_score("s", "Rate it", ["low", "mid", "high"])
+    assert sent_questions(seen[0]) == {
+        "answer": {
+            "type": "score",
+            "instructions": "Rate it",
+            "criteria": ["low", "mid", "high"],
+        }
+    }
+
+
+def test_noul_request(mock):
+    seen = mock(single_ok)
+    clef_mcp.clef_noul("s", "Is it safe?")
+    assert sent_questions(seen[0]) == {
+        "answer": {"type": "noul", "instructions": "Is it safe?"}
+    }
+
+
+def test_single_answer_projection(mock):
+    mock(single_ok)
+    expected = {
+        "answer": SINGLE_RESULT["answers"]["answer"],
+        "model": "clef",
+        "usage": {"tokens": 7},
+    }
+    assert clef_mcp.clef_choice("s", "i", {"a": "x", "b": "y"}) == expected
+    assert clef_mcp.clef_score("s", "i", ["l", "h"]) == expected
+    assert clef_mcp.clef_noul("s", "i") == expected
+
+
+def test_single_error_passthrough(mock):
+    body = {"success": False, "errors": [{"message": "quota gone"}]}
+    mock(lambda r: httpx.Response(200, json=body))
+    decide = clef_mcp.clef_decide("s", QUESTIONS)
+    assert "quota gone" in decide["error"]
+    assert clef_mcp.clef_choice("s", "i", {"a": "x", "b": "y"}) == decide
+    assert clef_mcp.clef_score("s", "i", ["l", "h"]) == decide
+    assert clef_mcp.clef_noul("s", "i") == decide
+
+
+def test_single_model_argument(mock):
+    seen = mock(single_ok)
+    clef_mcp.clef_noul("s", "i", model="clef-flash")
+    assert str(seen[0].url) == URL.format(model="clef-flash")
+    out = clef_mcp.clef_choice("s", "i", {"a": "x", "b": "y"}, model="nope")
+    assert "clef-flash" in out["error"]
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"model": "clef", "usage": {}},
+        {"model": "clef", "answers": "x", "usage": {}},
+        {"model": "clef", "answers": {"other": {}}, "usage": {}},
+    ],
+)
+def test_single_missing_answer(mock, result):
+    mock(lambda r: httpx.Response(200, json={"success": True, "result": result}))
+    out = clef_mcp.clef_noul("s", "i")
+    assert "unexpected" in out["error"].lower()
