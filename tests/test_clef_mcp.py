@@ -3,6 +3,7 @@
 # why: pytest fixtures are injected by parameter name, and tests are docstring-exempt.
 # pylint: disable=redefined-outer-name,missing-function-docstring,unused-argument
 
+import asyncio
 import json
 
 import httpx
@@ -269,3 +270,25 @@ def test_single_missing_answer(mock, result):
     mock(lambda r: httpx.Response(200, json={"success": True, "result": result}))
     out = clef_mcp.clef_noul("s", "i")
     assert "unexpected" in out["error"].lower()
+
+
+def test_list_models(mock, monkeypatch):
+    seen = mock(ok)
+    assert clef_mcp.clef_list_models() == {
+        "models": ["clef", "clef-flash"],
+        "default": "clef",
+    }
+    monkeypatch.setenv("CLEF_MODEL", "clef-flash")
+    assert clef_mcp.clef_list_models()["default"] == "clef-flash"
+    assert seen == []
+
+
+def test_tool_set():
+    names = {tool.name for tool in asyncio.run(clef_mcp.mcp.list_tools())}
+    assert names == {
+        "clef_decide",
+        "clef_choice",
+        "clef_score",
+        "clef_noul",
+        "clef_list_models",
+    }

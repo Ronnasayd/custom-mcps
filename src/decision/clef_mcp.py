@@ -248,6 +248,16 @@ def clef_noul(
     return _ask_one(model, state, {"type": "noul", "instructions": instructions})
 
 
+@mcp.tool()
+def clef_list_models() -> dict[str, Any]:
+    """List the supported Clef models and the default used when none is passed.
+
+    Returns:
+        ``{"models": [...], "default": ...}``; no network request is made.
+    """
+    return {"models": list(MODELS), "default": _default_model().lower()}
+
+
 def main() -> None:
     """Run the Clef MCP server over stdio."""
     mcp.run()
