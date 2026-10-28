@@ -1,13 +1,14 @@
 # custom-mcps
 
-[MCP](https://modelcontextprotocol.io) servers (FastMCP) for **read-only** database queries. Each server exposes a single tool and runs over stdio.
+[MCP](https://modelcontextprotocol.io) servers (FastMCP) for **read-only** database queries, plus a Cloudflare Clef decision server. Each server runs over stdio; the database servers expose a single tool each.
 
-| Command          | Tool                | Database   | Environment variables                                       |
-| ---------------- | ------------------- | ---------- | ----------------------------------------------------------- |
-| `mongodb-mcp`    | `my_mcp_mongodb`    | MongoDB    | `MONGODB_URL`, `MONGODB_DATABASE`                           |
-| `mysql-mcp`      | `my_mcp_mysql`      | MySQL      | `MYSQL_URL` (URL with host, port, user, password, database) |
-| `postgresql-mcp` | `my_mcp_postgresql` | PostgreSQL | `POSTGRES_URL` (libpq DSN/URL)                              |
-| `sqlite-mcp`     | `my_mcp_sqlite`     | SQLite     | `SQLITEDB_PATH` (default: `database.db`)                    |
+| Command          | Tool                | Database   | Environment variables                                         |
+| ---------------- | ------------------- | ---------- | ------------------------------------------------------------- |
+| `mongodb-mcp`    | `my_mcp_mongodb`    | MongoDB    | `MONGODB_URL`, `MONGODB_DATABASE`                             |
+| `mysql-mcp`      | `my_mcp_mysql`      | MySQL      | `MYSQL_URL` (URL with host, port, user, password, database)   |
+| `postgresql-mcp` | `my_mcp_postgresql` | PostgreSQL | `POSTGRES_URL` (libpq DSN/URL)                                |
+| `sqlite-mcp`     | `my_mcp_sqlite`     | SQLite     | `SQLITEDB_PATH` (default: `database.db`)                      |
+| `clef-mcp`       | `clef_*` (5 tools)  | -          | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLEF_MODEL` |
 
 ## Requirements
 
@@ -53,7 +54,21 @@ Run a SQL query and return `{"result": [...]}` or `{"error": "..."}`.
 `operation` accepts `find`, `find_one`, `count_documents` and `aggregate` (in which case `query` is the pipeline).
 Values that are not JSON-serializable (e.g. `ObjectId`) are converted to `str`.
 
-## Security (read-only)
+### `clef-mcp` (Cloudflare Clef decisions)
+
+Wraps the hosted Clef models on Cloudflare Workers AI. Every tool returns the result or `{"error": "..."}`; the API token is never included in output.
+
+- `clef_decide(state, questions, model=None)`: several typed questions in one call; returns the API `result` unchanged.
+- `clef_choice(state, instructions, options, model=None)`: pick one option.
+- `clef_score(state, instructions, levels, model=None)`: rate on an ordered scale.
+- `clef_noul(state, instructions, model=None)`: probability that a statement holds.
+- `clef_list_models()`: returns `{"models": ["clef", "clef-flash"], "default": ...}` without any network call.
+
+`model` is `clef` or `clef-flash`. When omitted, `CLEF_MODEL` is used, then `clef`. `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are required for the four decision tools.
+
+## Security (read-only databases)
+
+The database servers are read-only; `clef-mcp` talks only to the Cloudflare API and touches no database.
 
 Protection is enforced on the database session, not only on the query:
 
@@ -72,4 +87,6 @@ src/databases/
   mysql_mcp.py
   postgresql_mcp.py
   sqlite_mcp.py
+src/decision/
+  clef_mcp.py
 ```

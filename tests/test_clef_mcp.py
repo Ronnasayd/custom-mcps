@@ -300,3 +300,20 @@ def test_script_entry():
     root = pathlib.Path(__file__).resolve().parent.parent
     scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
     assert scripts["clef-mcp"] == "src.decision.clef_mcp:main"
+
+
+def test_readme_documents_clef():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    readme = (root / "README.md").read_text()
+    for item in (
+        "clef-mcp",
+        "clef_decide",
+        "clef_choice",
+        "clef_score",
+        "clef_noul",
+        "clef_list_models",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "CLEF_MODEL",
+    ):
+        assert item in readme, item
