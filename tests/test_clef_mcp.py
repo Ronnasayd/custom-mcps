@@ -5,6 +5,8 @@
 
 import asyncio
 import json
+import pathlib
+import tomllib
 
 import httpx
 import pytest
@@ -292,3 +294,9 @@ def test_tool_set():
         "clef_noul",
         "clef_list_models",
     }
+
+
+def test_script_entry():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
+    assert scripts["clef-mcp"] == "src.decision.clef_mcp:main"

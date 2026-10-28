@@ -22,6 +22,7 @@ mongodb-mcp = "src.databases.mongodb_mcp:main"
 mysql-mcp = "src.databases.mysql_mcp:main"
 postgresql-mcp = "src.databases.postgresql_mcp:main"
 sqlite-mcp = "src.databases.sqlite_mcp:main"
+clef-mcp = "src.decision.clef_mcp:main"
 
 [tool.uv.build-backend]
 module-name = "src"
