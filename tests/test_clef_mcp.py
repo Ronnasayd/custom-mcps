@@ -146,6 +146,7 @@ def _raise(exc):
     [
         (_raise(httpx.ReadTimeout("slow")), "timed out"),
         (_raise(httpx.ConnectError("refused")), "connect"),
+        (_raise(httpx.ReadError("broken pipe")), "request failed"),
         (lambda r: httpx.Response(502, text="<html>bad gateway</html>"), "502"),
         (lambda r: httpx.Response(200, text="not json"), "JSON"),
     ],
@@ -157,17 +158,31 @@ def test_transport_failure(mock, handler, fragment):
     assert fragment.lower() in out["error"].lower()
 
 
+def test_transport_failure_timeout_is_30s(mock):
+    seen = mock(ok)
+    clef_mcp.clef_decide("s", QUESTIONS)
+    timeout = seen[0].extensions["timeout"]
+    assert timeout == {"connect": 30, "read": 30, "write": 30, "pool": 30}
+
+
 def test_token_never_leaked(mock):
-    echo = {"success": False, "errors": [{"message": f"bad token {TOKEN}"}]}
+    twice = f"{TOKEN} and again {TOKEN}"
+    success = {
+        "success": True,
+        "result": {"note": twice, "items": [TOKEN, {"k": TOKEN}]},
+    }
     cases = [
-        lambda r: httpx.Response(200, json=echo),
-        _raise(httpx.ConnectError(f"cannot reach with {TOKEN}")),
-        lambda r: httpx.Response(500, text=f"oops {TOKEN}"),
+        lambda r: httpx.Response(
+            200, json={"success": False, "errors": [{"message": twice}]}
+        ),
+        _raise(httpx.ConnectError(f"cannot reach with {twice}")),
+        _raise(httpx.ReadError(f"read failed {twice}")),
+        lambda r: httpx.Response(200, json=success),
     ]
     for handler in cases:
         mock(handler)
         out = clef_mcp.clef_decide("s", QUESTIONS)
-        assert "error" in out
+        assert out
         assert TOKEN not in json.dumps(out)
 
 
@@ -179,6 +194,13 @@ def test_unexpected_shape(mock, payload):
     mock(lambda r: httpx.Response(200, json=payload))
     out = clef_mcp.clef_decide("s", QUESTIONS)
     assert "unexpected" in out["error"].lower()
+
+
+@pytest.mark.parametrize("success", ["yes", 1, "true"])
+def test_unexpected_shape_non_bool_success(mock, success):
+    body = {"success": success, "result": RESULT}
+    mock(lambda r: httpx.Response(200, json=body))
+    assert "error" in clef_mcp.clef_decide("s", QUESTIONS)
 
 
 SINGLE_RESULT = {
@@ -282,6 +304,8 @@ def test_list_models(mock, monkeypatch):
     }
     monkeypatch.setenv("CLEF_MODEL", "clef-flash")
     assert clef_mcp.clef_list_models()["default"] == "clef-flash"
+    monkeypatch.setenv("CLEF_MODEL", "  CLEF-Flash ")
+    assert clef_mcp.clef_list_models()["default"] == "clef-flash"
     assert seen == []
 
 
@@ -296,6 +320,13 @@ def test_tool_set():
     }
 
 
+def test_script_entry_runs_server(monkeypatch):
+    calls = []
+    monkeypatch.setattr(clef_mcp.mcp, "run", lambda *a, **k: calls.append((a, k)))
+    clef_mcp.main()
+    assert calls == [((), {})]
+
+
 def test_script_entry():
     root = pathlib.Path(__file__).resolve().parent.parent
     scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
@@ -305,15 +336,15 @@ def test_script_entry():
 def test_readme_documents_clef():
     root = pathlib.Path(__file__).resolve().parent.parent
     readme = (root / "README.md").read_text()
-    for item in (
-        "clef-mcp",
+    row = next(ln for ln in readme.splitlines() if ln.startswith("| `clef-mcp`"))
+    for var in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", "CLEF_MODEL"):
+        assert var in row, var
+    section = readme.split("### `clef-mcp`", 1)[1].split("\n## ", 1)[0]
+    for tool in (
         "clef_decide",
         "clef_choice",
         "clef_score",
         "clef_noul",
         "clef_list_models",
-        "CLOUDFLARE_ACCOUNT_ID",
-        "CLOUDFLARE_API_TOKEN",
-        "CLEF_MODEL",
     ):
-        assert item in readme, item
+        assert tool in section, tool

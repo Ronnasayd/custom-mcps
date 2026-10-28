@@ -20,6 +20,9 @@ TIMEOUT_SECONDS = 30
 _transport: httpx.BaseTransport | None = None  # pylint: disable=invalid-name
 
 State = str | dict[str, Any] | list
+type JsonValue = (
+    str | int | float | bool | None | dict[str, JsonValue] | list[JsonValue]
+)
 
 
 def _default_model() -> str:
@@ -126,6 +129,25 @@ def _parse(response: httpx.Response) -> dict[str, Any]:
     return payload["result"]
 
 
+def _scrub(value: JsonValue, token: str) -> JsonValue:
+    """Replace every occurrence of the token in strings nested inside a value.
+
+    Args:
+        value: Any JSON-like value (str, dict, list or scalar).
+        token: Secret to remove.
+
+    Returns:
+        A copy of the value with the token replaced by ``[redacted]``.
+    """
+    if isinstance(value, str):
+        return value.replace(token, "[redacted]")
+    if isinstance(value, dict):
+        return {k: _scrub(v, token) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub(v, token) for v in value]
+    return value
+
+
 def _post(model: str | None, state: State, questions: dict[str, Any]) -> dict[str, Any]:
     """Validate inputs, call the API and scrub the token from any error.
 
@@ -145,9 +167,7 @@ def _post(model: str | None, state: State, questions: dict[str, Any]) -> dict[st
         return {"error": error}
     sent = _send(account, token, name, state, questions)
     out = sent if isinstance(sent, dict) else _parse(sent)
-    if "error" in out and isinstance(out["error"], str):
-        out["error"] = out["error"].replace(token, "[redacted]")
-    return out
+    return {key: _scrub(value, token) for key, value in out.items()}
 
 
 @mcp.tool()
