@@ -1,7 +1,10 @@
 """FastMCP server scoring pairwise text similarity with a local embedding model."""
 
+import contextlib
+import functools
 import json
 import os
+import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -10,6 +13,7 @@ import numpy as np
 mcp = FastMCP(name="similarity_tool")
 
 DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_CACHE_DIR = "~/.cache/fastembed"
 SCORE_DECIMALS = 4
 
 # invariant: None in production; tests set a fake here.
@@ -19,6 +23,43 @@ _embedder: Any = None  # pylint: disable=invalid-name
 def _model_name() -> str:
     """Return the EMBEDDING_MODEL value, or the default model when it is blank."""
     return os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_MODEL
+
+
+def _cache_dir() -> str:
+    """Return the expanded FASTEMBED_CACHE_PATH, or the default when it is blank."""
+    value = os.environ.get("FASTEMBED_CACHE_PATH", "").strip()
+    return os.path.expanduser(value or DEFAULT_CACHE_DIR)
+
+
+# why: fastembed is optional, so its embedder type cannot be imported at module level.
+@functools.cache
+def _load_embedder(model: str) -> Any:  # noqa: ANN401
+    """Build the embedder for a model once per process.
+
+    Args:
+        model: Model name to load.
+
+    Returns:
+        The loaded ``fastembed.TextEmbedding``.
+    """
+    # hazard: the client reads stdout as the MCP stream, so a print here corrupts it.
+    with contextlib.redirect_stdout(sys.stderr):
+        # pylint: disable-next=import-outside-toplevel,import-error
+        import fastembed  # type: ignore[import-not-found,unused-ignore]
+
+        return fastembed.TextEmbedding(model_name=model, cache_dir=_cache_dir())
+
+
+def _get_embedder(model: str) -> Any:  # noqa: ANN401
+    """Return the injected embedder, or the cached one for a model.
+
+    Args:
+        model: Model name to load when no embedder is injected.
+
+    Returns:
+        An object with an ``embed`` method.
+    """
+    return _embedder if _embedder is not None else _load_embedder(model)
 
 
 def _normalized(vectors: np.ndarray) -> np.ndarray:
@@ -56,7 +97,8 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     """
     # why: the two-list branch lands next; the published signature is already final.
     del texts_b
-    vectors = np.array(list(_embedder.embed(texts_a)), dtype=np.float64)
+    model = _model_name()
+    vectors = np.array(list(_get_embedder(model).embed(texts_a)), dtype=np.float64)
     unit = _normalized(vectors)
     matrix = np.round(unit @ unit.T, SCORE_DECIMALS).tolist()
-    return json.dumps({"matrix": matrix, "model": _model_name()}, separators=(",", ":"))
+    return json.dumps({"matrix": matrix, "model": model}, separators=(",", ":"))

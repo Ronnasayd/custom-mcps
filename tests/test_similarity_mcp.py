@@ -7,6 +7,8 @@
 import asyncio
 import json
 import pathlib
+import subprocess
+import sys
 import tomllib
 import types
 
@@ -35,6 +37,11 @@ def env(monkeypatch):
     monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
     monkeypatch.delenv("SIMILARITY_MAX_TEXTS", raising=False)
     monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
+    similarity_mcp._load_embedder.cache_clear()
+
+
+def vectors_for(texts):
+    return (np.array(VECTORS[text], dtype=np.float32) for text in texts)
 
 
 @pytest.fixture
@@ -43,11 +50,24 @@ def fake_embedder(monkeypatch):
 
     def embed(texts):
         calls.append(list(texts))
-        return (np.array(VECTORS[text], dtype=np.float32) for text in texts)
+        return vectors_for(texts)
 
     embedder = types.SimpleNamespace(embed=embed)
     monkeypatch.setattr(similarity_mcp, "_embedder", embedder)
     return calls
+
+
+@pytest.fixture
+def fake_fastembed(monkeypatch):
+    built = []
+
+    def text_embedding(model_name, cache_dir):
+        built.append((model_name, cache_dir))
+        return types.SimpleNamespace(embed=vectors_for)
+
+    fastembed = types.SimpleNamespace(TextEmbedding=text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    return built
 
 
 def similarity(*args):
@@ -161,3 +181,69 @@ def test_text_kept_unchanged(fake_embedder):
 def test_matrix_symmetric(fake_embedder):
     matrix = np.array(similarity(["a", "d", "e", "f"])["matrix"])
     assert np.abs(matrix - matrix.T).max() <= 0.0001
+
+
+def test_loader_receives_env_model(fake_fastembed, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_MODEL", "org/custom-model")
+    similarity(["a"])
+    assert fake_fastembed[0][0] == "org/custom-model"
+
+
+def test_one_embedder_per_model(fake_fastembed, monkeypatch, tmp_path):
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(tmp_path))
+    monkeypatch.setenv("EMBEDDING_MODEL", "org/one")
+    similarity(["a"])
+    similarity(["b"])
+    assert fake_fastembed == [("org/one", str(tmp_path))]
+    monkeypatch.setenv("EMBEDDING_MODEL", "org/two")
+    similarity(["a"])
+    assert fake_fastembed == [("org/one", str(tmp_path)), ("org/two", str(tmp_path))]
+
+
+def test_cache_dir_default(fake_fastembed, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    expected = str(tmp_path / ".cache" / "fastembed")
+    similarity_mcp._load_embedder("org/unset")
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "   ")
+    similarity_mcp._load_embedder("org/blank")
+    assert fake_fastembed == [("org/unset", expected), ("org/blank", expected)]
+
+
+def test_cache_dir_env(fake_fastembed, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "/var/models")
+    similarity_mcp._load_embedder("org/absolute")
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "~/x")
+    similarity_mcp._load_embedder("org/tilde")
+    assert fake_fastembed == [
+        ("org/absolute", "/var/models"),
+        ("org/tilde", str(tmp_path / "x")),
+    ]
+
+
+def test_load_keeps_stdout_clean(monkeypatch, capsys):
+    def noisy_text_embedding(model_name, cache_dir):
+        print("downloading the model")
+
+    fastembed = types.SimpleNamespace(TextEmbedding=noisy_text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    similarity_mcp._load_embedder("org/noisy")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "downloading the model" in captured.err
+
+
+def test_import_without_fastembed():
+    code = (
+        "import sys\n"
+        "sys.modules['fastembed'] = None\n"
+        "import src.embeddings.similarity_mcp\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
