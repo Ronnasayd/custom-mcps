@@ -247,3 +247,60 @@ def test_import_without_fastembed():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def run_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(similarity_mcp.mcp, "run", lambda: calls.append("run"))
+    return calls
+
+
+def test_main_loads_before_run(fake_fastembed, monkeypatch):
+    loaded_at_run = []
+    monkeypatch.setattr(
+        similarity_mcp.mcp, "run", lambda: loaded_at_run.extend(fake_fastembed)
+    )
+    similarity_mcp.main()
+    assert len(loaded_at_run) == 1
+    assert loaded_at_run[0][0] == DEFAULT_MODEL
+
+
+def test_main_ready_line(monkeypatch, capsys):
+    def text_embedding(model_name, cache_dir):
+        print("model loading", file=sys.stderr)
+
+    fastembed = types.SimpleNamespace(TextEmbedding=text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    stderr_at_run = []
+    monkeypatch.setattr(
+        similarity_mcp.mcp, "run", lambda: stderr_at_run.append(capsys.readouterr().err)
+    )
+    similarity_mcp.main()
+    assert stderr_at_run == ["model loading\nsimilarity-mcp: model ready\n"]
+
+
+def test_main_missing_extra(run_calls, monkeypatch):
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    with pytest.raises(SystemExit) as exit_info:
+        similarity_mcp.main()
+    message = exit_info.value.code
+    assert isinstance(message, str)
+    assert "--extra embeddings" in message
+    assert "import of fastembed halted" in message
+    assert run_calls == []
+
+
+def test_main_load_failure(run_calls, monkeypatch):
+    def text_embedding(model_name, cache_dir):
+        raise OSError("disk is full")
+
+    fastembed = types.SimpleNamespace(TextEmbedding=text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    with pytest.raises(SystemExit) as exit_info:
+        similarity_mcp.main()
+    message = exit_info.value.code
+    assert isinstance(message, str)
+    assert "disk is full" in message
+    assert DEFAULT_MODEL in message
+    assert run_calls == []

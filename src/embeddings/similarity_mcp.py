@@ -102,3 +102,24 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     unit = _normalized(vectors)
     matrix = np.round(unit @ unit.T, SCORE_DECIMALS).tolist()
     return json.dumps({"matrix": matrix, "model": model}, separators=(",", ":"))
+
+
+def main() -> None:
+    """Load the model, then run the similarity MCP server over stdio."""
+    model = _model_name()
+    try:
+        _load_embedder(model)
+    except ImportError as exc:
+        sys.exit(
+            f"similarity-mcp: cannot import fastembed: {exc}. "
+            "Start the server with: uv run --extra embeddings similarity-mcp"
+        )
+    # why: a load fails in many ways (network, disk, bad model); all end the startup.
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        sys.exit(f"similarity-mcp: could not load model {model}: {exc}")
+    sys.stderr.write("similarity-mcp: model ready\n")
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
