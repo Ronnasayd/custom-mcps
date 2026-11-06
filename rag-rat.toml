@@ -13,7 +13,7 @@ root = "."
 # listed dirs; a `cpp` binding also claims `.h` headers (indexed as C++), a `c` binding
 # claims `.c` + `.h`. Add or remove languages and directories as your layout needs.
 [target_bindings]
-python = ["src"]
+python = ["src", "tests"]
 markdown = ["."]
 
 # Richer targets (uncomment to use): a named target with an explicit kind and custom file

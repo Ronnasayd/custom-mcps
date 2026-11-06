@@ -1,37 +1,44 @@
 <!-- INIT:AUTO-GENERATED-CONTEXT:DO-NOT-MODIFY -->
 
-## Mandatory rules that must always be followed
+## Mandatory rules — always follow
 
-- Every user question → interactive tool, never plain text. Claude:
-  `AskUserQuestion`. Multiple questions: `grilling` skill.
+- User question → interactive tool, never plain text. Claude: `AskUserQuestion`. Many questions: `grilling` skill.
 
-- When task list exists (multi-step work), use `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` to give user feedback. Mark tasks complete as done, don't batch.
+- `AskUserQuestion` must be fully contextualized, never terse. Question body: explain _why_ asked (what found in code, what trade-off) before choice. Option `description`: what picking it does/causes — not label restated. No truncated question/option text; full explanation every time.
 
-- Whenever you modify a component or screen → run tests using Playwright (or a similar E2E tool) before finalizing.
+- User asks question → answer only. No code change without explicit user authorization.
 
-- Never treat documentation (`markdown files`,`memories`) as absolute truth. Only the implemented code should be treated as the truth.
+- Multi-step work → use `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` for feedback. Mark each task complete when done, no batching.
 
-- Never assume the code is correct without tests to validate it.
+- Modify component/screen → run Playwright (or similar E2E) tests before finalizing.
 
-## Commonly used skills
+- Lint/type/test errors in touched files → fix, even if not caused by you.
 
-| When                                                   | Use                                          |
-| ------------------------------------------------------ | -------------------------------------------- |
-| New skill's description doesn't trigger reliably       | `skill-description-generator`                |
-| Writing a commit message                               | `semantic-commit-message` / `caveman-commit` |
-| Opening a PR                                           | `generate-pr-description`                    |
-| Unsure about git workflow (rebase, branch strategy)    | `git-guide` / `git-workflow`                 |
-| Break big/complex problem into sub-problems            | `dynamic-programming-analysis`               |
-| Generate/update project docs from code or diff         | `generate-docs`                              |
-| Write PR description from diff/commits                 | `generate-pr-description`                    |
-| Review a PR                                            | `pr-review`                                  |
-| Judge PR w/ evidence-first review + inline GH comments | `the-judge`                                  |
-| Resolve merge conflicts                                | `resolve-merge-conflicts`                    |
-| Execute tasks for a spec-driven feature (taskmaster)   | `sd-execute`                                 |
-| Generate a plan step-by-step                           | `sd-planning`                                |
-| Build requirements review table from spec/design/tasks | `spec-to-requirements-table`                 |
-| Pick between technical options (pros/cons)             | `technical-decision-helper`                  |
-| Map files/deps/tests a task touches before changing    | `context-map`                                |
+- Docs (`markdown files`, `memories`) not absolute truth. Only implemented code = truth.
+
+- No code assumed correct without tests validating it.
+
+- TDD mandatory when repo already has tests (suite/framework present): failing test first (Red), minimal code to pass (Green), then refactor. Small loops only, no big unverified blocks. No test setup in repo → don't impose one unprompted.
+
+- Evidence over trust: before human review, give proof change works — passing test logs, screenshots/recordings of E2E or visual tests. No "should work" claims.
+
+- Vertical slices only: thin end-to-end slices (tracer bullets) through all layers, not horizontal layers (all DB, then all API, then all UI). Each slice tested and validated before next.
+
+- Task done (testing, execution, build) → kill all background processes/servers started, delete temp dirs generated.
+
+- Anytime: evaluate what worth saving as permanent memory. Save only what next session needs and can't rediscover from code, Git, or CLAUDE.md — _reason_ behind decision, non-obvious invariant, user preference. Already in repo or only relevant to this conversation → don't save. Persist via `ai-memory-durable-pages` skill.
+
+- Self-contained task (no dependency on history, clear input, concise output, intermediate work not required in the main conversation) → use a sub-agent.
+
+## Mandatory rules — hallucination protection
+
+- "I don't know" allowed: uncertain or info missing → say so explicitly (e.g. "I don't have enough information to confidently assess this"). Never fill gaps with guesses.
+
+- Quote before analyzing: long docs (>20k tokens) → first extract word-for-word quotes relevant to task, base analysis only on them, reference by number. None found → say "No relevant quotes found".
+
+- Cite every factual claim: each claim about code, docs, external sources carries source (`path:line`, command output, URL, direct quote) for audit.
+
+- Verify after generating: check each claim in response has supporting quote/source. None → retract claim (mark removal with `[]` when editing document).
 
 ## Context-Specific Rules
 

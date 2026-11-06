@@ -131,6 +131,37 @@ def _validate(texts_a: list[str], texts_b: list[str] | None, limit: int) -> str 
     return f"too many texts: {count} > {limit}" if count > limit else None
 
 
+def _scores(texts_a: list[str], texts_b: list[str] | None) -> dict[str, Any]:
+    """Score every pair of texts by cosine similarity.
+
+    Args:
+        texts_a: Texts of the matrix rows.
+        texts_b: Texts of the matrix columns, or None in one-list mode.
+
+    Returns:
+        {"matrix": [[...]], "model": "<name>"}, or {"error": "<message>"}.
+    """
+    limit, problem = _max_texts()
+    problem = problem or _validate(texts_a, texts_b, limit)
+    if problem:
+        return {"error": problem}
+    texts = texts_a if texts_b is None else texts_a + texts_b
+    model = _model_name()
+    try:
+        # hazard: embed may return a lazy generator, so list() must stay in this try.
+        vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
+    # why: a model fails in many ways, and each one must reach the client as data.
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {"error": f"embedding failed: {exc}"}
+    if len(vectors) != len(texts):
+        count_problem = f"expected {len(texts)} vectors, got {len(vectors)}"
+        return {"error": f"embedding failed: {count_problem}"}
+    unit = _normalized(vectors)
+    columns = unit if texts_b is None else unit[len(texts_a) :]
+    matrix = np.round(unit[: len(texts_a)] @ columns.T, SCORE_DECIMALS).tolist()
+    return {"matrix": matrix, "model": model}
+
+
 @mcp.tool(structured_output=False)
 def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> str:
     """Score every pair of texts by cosine similarity, from -1.0 to 1.0.
@@ -151,25 +182,43 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     Returns:
         Compact JSON text: {"matrix": [[...]], "model": "<name>"}, or {"error": ...}.
     """
-    limit, problem = _max_texts()
-    problem = problem or _validate(texts_a, texts_b, limit)
-    if problem:
-        return _compact_json({"error": problem})
-    texts = texts_a if texts_b is None else texts_a + texts_b
-    model = _model_name()
+    return _compact_json(_scores(texts_a, texts_b))
+
+
+@mcp.tool(structured_output=False)
+def similarity_matrix_csv(
+    texts_a: list[str], output_path: str, texts_b: list[str] | None = None
+) -> str:
+    """Save the similarity_matrix scores to a CSV file and return only its path.
+
+    Takes the same texts, limits and rules as similarity_matrix.
+    The CSV has no header: line i is texts_a[i], column j is texts_b[j].
+    Omitting texts_b compares texts_a with itself.
+    An existing file at output_path is overwritten.
+    The parent directory must already exist.
+    A bad call returns {"error": "<message>"} and writes nothing.
+
+    Args:
+        texts_a: Texts of the matrix rows.
+        output_path: CSV file to write; "~" expands, and a relative path follows
+            the working directory of the server.
+        texts_b: Texts of the matrix columns; omit to compare texts_a with itself.
+
+    Returns:
+        Compact JSON text: {"path": "<absolute path>"}, or {"error": ...}.
+    """
+    if not output_path.strip():
+        return _compact_json({"error": "output_path is blank"})
+    result = _scores(texts_a, texts_b)
+    if "error" in result:
+        return _compact_json(result)
+    path = os.path.abspath(os.path.expanduser(output_path))
     try:
-        # hazard: embed may return a lazy generator, so list() must stay in this try.
-        vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
-    # why: a model fails in many ways, and each one must reach the client as data.
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        return _compact_json({"error": f"embedding failed: {exc}"})
-    if len(vectors) != len(texts):
-        count_problem = f"expected {len(texts)} vectors, got {len(vectors)}"
-        return _compact_json({"error": f"embedding failed: {count_problem}"})
-    unit = _normalized(vectors)
-    columns = unit if texts_b is None else unit[len(texts_a) :]
-    matrix = np.round(unit[: len(texts_a)] @ columns.T, SCORE_DECIMALS).tolist()
-    return _compact_json({"matrix": matrix, "model": model})
+        np.savetxt(path, result["matrix"], fmt=f"%.{SCORE_DECIMALS}f", delimiter=",")
+    # why: ValueError covers a NUL byte in the path, which open rejects before the OS.
+    except (OSError, ValueError) as exc:
+        return _compact_json({"error": f"cannot write csv: {exc}"})
+    return _compact_json({"path": path})
 
 
 def main() -> None:

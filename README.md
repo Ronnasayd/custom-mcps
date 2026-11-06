@@ -2,14 +2,14 @@
 
 [MCP](https://modelcontextprotocol.io) servers (FastMCP) for **read-only** database queries, plus a Cloudflare Clef decision server and a local text similarity server. Each server runs over stdio; the database servers expose a single tool each.
 
-| Command          | Tool                | Database   | Environment variables                                             |
-| ---------------- | ------------------- | ---------- | ----------------------------------------------------------------- |
-| `mongodb-mcp`    | `my_mcp_mongodb`    | MongoDB    | `MONGODB_URL`, `MONGODB_DATABASE`                                 |
-| `mysql-mcp`      | `my_mcp_mysql`      | MySQL      | `MYSQL_URL` (URL with host, port, user, password, database)       |
-| `postgresql-mcp` | `my_mcp_postgresql` | PostgreSQL | `POSTGRES_URL` (libpq DSN/URL)                                    |
-| `sqlite-mcp`     | `my_mcp_sqlite`     | SQLite     | `SQLITEDB_PATH` (default: `database.db`)                          |
-| `clef-mcp`       | `clef_*` (5 tools)  | -          | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLEF_MODEL`     |
-| `similarity-mcp` | `similarity_matrix` | -          | `EMBEDDING_MODEL`, `SIMILARITY_MAX_TEXTS`, `FASTEMBED_CACHE_PATH` |
+| Command          | Tool                                         | Database   | Environment variables                                             |
+| ---------------- | -------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| `mongodb-mcp`    | `my_mcp_mongodb`                             | MongoDB    | `MONGODB_URL`, `MONGODB_DATABASE`                                 |
+| `mysql-mcp`      | `my_mcp_mysql`                               | MySQL      | `MYSQL_URL` (URL with host, port, user, password, database)       |
+| `postgresql-mcp` | `my_mcp_postgresql`                          | PostgreSQL | `POSTGRES_URL` (libpq DSN/URL)                                    |
+| `sqlite-mcp`     | `my_mcp_sqlite`                              | SQLite     | `SQLITEDB_PATH` (default: `database.db`)                          |
+| `clef-mcp`       | `clef_*` (5 tools)                           | -          | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLEF_MODEL`     |
+| `similarity-mcp` | `similarity_matrix`, `similarity_matrix_csv` | -          | `EMBEDDING_MODEL`, `SIMILARITY_MAX_TEXTS`, `FASTEMBED_CACHE_PATH` |
 
 ## Requirements
 
@@ -78,6 +78,8 @@ A string holding a JSON array is read as that list, and the string `null` as `nu
 
 The response is compact JSON with the fields `matrix` and `model`, such as `{"matrix":[[1.0,0.9909],[0.9909,1.0]],"model":"<model name>"}`. A cell's position is the index of its texts in the input lists. A bad call returns `{"error": "..."}` and the server keeps serving.
 
+`similarity_matrix_csv(texts_a, output_path, texts_b=None)` takes the same texts and follows the same rules, but saves the scores to a CSV file and returns only its absolute path, such as `{"path":"/tmp/scores.csv"}`. The CSV has no header: line `i` is `texts_a[i]`, column `j` is `texts_b[j]`, and each score has 4 decimal places. It overwrites an existing file, and the parent directory must already exist. `~` expands, and a relative path follows the working directory of the server.
+
 A call takes at most 300 texts across both lists. Set `SIMILARITY_MAX_TEXTS` to change the limit; it is read on each call.
 
 `EMBEDDING_MODEL` selects the model, by default `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`. The default model reads only the first 128 tokens of a text, so long texts that share an opening can score high.
@@ -96,7 +98,7 @@ A client can give up while the first download runs, so fetch the model from a te
 
 ## Security (read-only databases)
 
-The database servers are read-only; `clef-mcp` talks only to the Cloudflare API and touches no database. `similarity-mcp` touches no database and contacts the network only to download the model.
+The database servers are read-only; `clef-mcp` talks only to the Cloudflare API and touches no database. `similarity-mcp` touches no database and contacts the network only to download the model. `similarity_matrix_csv` writes to any path the server process can write to.
 
 Protection is enforced on the database session, not only on the query:
 

@@ -99,11 +99,15 @@ def similarity(*args):
     return json.loads(similarity_mcp.similarity_matrix(*args))
 
 
-def call_over_wire(arguments):
+def similarity_csv(*args):
+    return json.loads(similarity_mcp.similarity_matrix_csv(*args))
+
+
+def call_over_wire(arguments, tool="similarity_matrix"):
     async def run():
         server = similarity_mcp.mcp
         async with create_connected_server_and_client_session(server) as session:
-            return await session.call_tool("similarity_matrix", arguments)
+            return await session.call_tool(tool, arguments)
 
     return asyncio.run(run())
 
@@ -167,7 +171,7 @@ def test_compact_json(fake_embedder):
 
 def test_tool_set():
     names = {tool.name for tool in asyncio.run(similarity_mcp.mcp.list_tools())}
-    assert names == {"similarity_matrix"}
+    assert names == {"similarity_matrix", "similarity_matrix_csv"}
 
 
 def test_tool_description():
@@ -699,7 +703,7 @@ def test_readme_row():
     row = next(line for line in lines if line.startswith("| `similarity-mcp`"))
     _, command, tool, database, variables, _ = row.split("|")
     assert command.strip() == "`similarity-mcp`"
-    assert tool.strip() == "`similarity_matrix`"
+    assert tool.strip() == "`similarity_matrix`, `similarity_matrix_csv`"
     assert database.strip() == "-"
     assert "`EMBEDDING_MODEL`" in variables
     assert "`SIMILARITY_MAX_TEXTS`" in variables
@@ -778,3 +782,101 @@ def test_json_text_documented():
     assert "string holding a JSON array" in description
     assert "string holding a JSON array" in section
     assert "`null`" in section
+
+
+def test_csv_two_lists(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    assert similarity_csv(["a", "b"], str(path), ["c", "d"]) == {"path": str(path)}
+    assert path.read_text() == "-1.0000,0.6000\n0.0000,0.8000\n"
+
+
+def test_csv_one_list(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    similarity_csv(["a", "b"], str(path))
+    assert path.read_text() == "1.0000,0.0000\n0.0000,1.0000\n"
+    assert fake_embedder == [["a", "b"]]
+
+
+def test_csv_same_scores_as_matrix(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    similarity_csv(["a", "d", "e"], str(path), ["b", "f"])
+    expected = similarity(["a", "d", "e"], ["b", "f"])["matrix"]
+    assert np.loadtxt(path, delimiter=",").tolist() == expected
+
+
+def test_csv_overwrites(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    path.write_text("old")
+    similarity_csv(["a"], str(path))
+    assert path.read_text() == "1.0000\n"
+
+
+def test_csv_relative_path_returned_absolute(fake_embedder, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert similarity_csv(["a"], "scores.csv") == {"path": str(tmp_path / "scores.csv")}
+    assert (tmp_path / "scores.csv").exists()
+
+
+def test_csv_expands_home(fake_embedder, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert similarity_csv(["a"], "~/scores.csv") == {
+        "path": str(tmp_path / "scores.csv")
+    }
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_csv_blank_path(fake_embedder, blank):
+    assert similarity_csv(["a"], blank) == {"error": "output_path is blank"}
+    assert fake_embedder == []
+
+
+def test_csv_bad_input_writes_nothing(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    assert similarity_csv([], str(path)) == {"error": "texts_a must not be empty"}
+    assert not path.exists()
+
+
+def test_csv_embedding_failure_writes_nothing(tmp_path, monkeypatch):
+    def embed(texts):
+        raise RuntimeError("model crashed")
+
+    embedder = types.SimpleNamespace(embed=embed)
+    monkeypatch.setattr(similarity_mcp, "_embedder", embedder)
+    path = tmp_path / "scores.csv"
+    assert similarity_csv(["a"], str(path)) == {
+        "error": "embedding failed: model crashed"
+    }
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("name", ["missing/scores.csv", ".", "bad\0name.csv"])
+def test_csv_unwritable_path(fake_embedder, tmp_path, name):
+    out = similarity_csv(["a"], f"{tmp_path}/{name}")
+    assert out["error"].startswith("cannot write csv: ")
+
+
+def test_csv_over_wire(fake_embedder, tmp_path):
+    path = tmp_path / "scores.csv"
+    result = call_over_wire(
+        {"texts_a": '["a", "b"]', "output_path": str(path), "texts_b": "null"},
+        "similarity_matrix_csv",
+    )
+    assert result.isError is False
+    assert json.loads(result.content[0].text) == {"path": str(path)}
+    assert path.read_text() == "1.0000,0.0000\n0.0000,1.0000\n"
+
+
+def test_csv_documented():
+    section = readme_section("### `similarity-mcp`", "\n### ")
+    assert "similarity_matrix_csv(texts_a, output_path, texts_b=None)" in section
+    assert '{"path":"/tmp/scores.csv"}' in section
+    assert "overwrites" in section
+
+
+@pytest.mark.smoke
+def test_smoke_csv(tmp_path):
+    path = tmp_path / "scores.csv"
+    similarity_csv(["gato", "cat", "carro"], str(path))
+    scores = np.loadtxt(path, delimiter=",")
+    assert scores.shape == (3, 3)
+    assert scores[0][1] > scores[0][2]
