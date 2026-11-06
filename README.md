@@ -74,6 +74,8 @@ Wraps the hosted Clef models on Cloudflare Workers AI. Every tool returns the re
 - One list: omit `texts_b` to compare `texts_a` with itself and get an N×N matrix.
 - Two lists: pass `texts_b` to get an N×M matrix, with rows from `texts_a` and columns from `texts_b`.
 
+A string holding a JSON array is read as that list, and the string `null` as `null`: `texts_a='["x","y"]'` returns a matrix, and `texts_b='null'` selects one-list mode.
+
 The response is compact JSON with the fields `matrix` and `model`, such as `{"matrix":[[1.0,0.9909],[0.9909,1.0]],"model":"<model name>"}`. A cell's position is the index of its texts in the input lists. A bad call returns `{"error": "..."}` and the server keeps serving.
 
 A call takes at most 300 texts across both lists. Set `SIMILARITY_MAX_TEXTS` to change the limit; it is read on each call.

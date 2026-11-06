@@ -138,6 +138,7 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     A row or column of `matrix` is the position of a text in the input lists.
     Rows follow texts_a and columns follow texts_b.
     Omitting texts_b compares texts_a with itself.
+    A string holding a JSON array is read as that list, and "null" as null.
     The default limit is 300 texts across both lists.
     A bad call returns {"error": "<message>"}.
     A text whose embedding has zero norm scores 0.0 on all its cells.

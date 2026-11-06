@@ -759,3 +759,22 @@ def test_limit_too_long_to_parse(fake_embedder, monkeypatch):
         "error": "SIMILARITY_MAX_TEXTS must be a positive integer"
     }
     assert fake_embedder == []
+
+
+def test_json_text_arguments(fake_embedder):
+    identity = [[1.0, 0.0], [0.0, 1.0]]
+    array_text = call_over_wire({"texts_a": '["a", "b"]'})
+    null_text = call_over_wire({"texts_a": ["a", "b"], "texts_b": "null"})
+    json_null = call_over_wire({"texts_a": ["a", "b"], "texts_b": None})
+    for result in (array_text, null_text, json_null):
+        assert result.isError is False
+        assert json.loads(result.content[0].text)["matrix"] == identity
+    assert fake_embedder == [["a", "b"]] * 3
+
+
+def test_json_text_documented():
+    description = asyncio.run(similarity_mcp.mcp.list_tools())[0].description
+    section = readme_section("### `similarity-mcp`", "\n### ")
+    assert "string holding a JSON array" in description
+    assert "string holding a JSON array" in section
+    assert "`null`" in section
