@@ -518,3 +518,169 @@ def test_first_problem_reported(fake_embedder, monkeypatch):
     assert similarity([]) == {
         "error": "SIMILARITY_MAX_TEXTS must be a positive integer"
     }
+
+
+def use_embedder(monkeypatch, embed):
+    embedder = types.SimpleNamespace(embed=embed)
+    monkeypatch.setattr(similarity_mcp, "_embedder", embedder)
+
+
+def broken_stream():
+    yield np.array([1.0, 0.0])
+    raise RuntimeError("stream broke")
+
+
+def scripted_embed(texts):
+    if "boom" in texts:
+        raise RuntimeError("model crashed")
+    if "mid" in texts:
+        return broken_stream()
+    if "short" in texts:
+        return vectors_for(["a"])
+    return vectors_for(texts)
+
+
+def in_session(scenario):
+    async def run():
+        server = similarity_mcp.mcp
+        async with create_connected_server_and_client_session(server) as session:
+            await scenario(session)
+
+    asyncio.run(run())
+
+
+async def call_tool(session, arguments):
+    return await session.call_tool("similarity_matrix", arguments)
+
+
+async def assert_serves(session):
+    result = await call_tool(session, {"texts_a": ["a", "c"]})
+    assert result.isError is False
+    assert json.loads(result.content[0].text)["matrix"] == [[1.0, -1.0], [-1.0, 1.0]]
+
+
+async def assert_error_data(session, arguments, message):
+    result = await call_tool(session, arguments)
+    assert result.isError is False
+    assert json.loads(result.content[0].text) == {"error": message}
+
+
+async def assert_rejected(session, arguments, field):
+    result = await call_tool(session, arguments)
+    assert result.isError is True
+    assert field in result.content[0].text
+
+
+def test_embed_raises(monkeypatch):
+    use_embedder(monkeypatch, scripted_embed)
+    assert similarity(["boom"]) == {"error": "embedding failed: model crashed"}
+
+
+def test_embed_raises_mid_iteration(monkeypatch):
+    use_embedder(monkeypatch, scripted_embed)
+    assert similarity(["mid"]) == {"error": "embedding failed: stream broke"}
+
+
+def test_load_raises_on_call(monkeypatch):
+    def text_embedding(model_name, cache_dir):
+        raise OSError("disk is full")
+
+    fastembed = types.SimpleNamespace(TextEmbedding=text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    assert similarity(["a"]) == {"error": "embedding failed: disk is full"}
+
+
+def test_vector_count_mismatch(monkeypatch):
+    use_embedder(monkeypatch, lambda texts: vectors_for(["a", "b"]))
+    assert similarity(["a", "b", "c"]) == {
+        "error": "embedding failed: expected 3 vectors, got 2"
+    }
+
+
+def test_next_call_after_errors(monkeypatch):
+    def text_embedding(model_name, cache_dir):
+        if model_name == "org/broken":
+            raise OSError("disk is full")
+        return types.SimpleNamespace(embed=scripted_embed)
+
+    async def scenario(session):
+        await assert_error_data(session, {"texts_a": []}, "texts_a must not be empty")
+        await assert_serves(session)
+        await assert_error_data(
+            session, {"texts_a": ["a"], "texts_b": []}, "texts_b must not be empty"
+        )
+        await assert_serves(session)
+        await assert_error_data(session, {"texts_a": [" "]}, "texts_a[0] is blank")
+        await assert_serves(session)
+        await assert_error_data(
+            session, {"texts_a": ["a"] * 301}, "too many texts: 301 > 300"
+        )
+        await assert_serves(session)
+        monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "none")
+        await assert_error_data(
+            session,
+            {"texts_a": ["a"]},
+            "SIMILARITY_MAX_TEXTS must be a positive integer",
+        )
+        monkeypatch.delenv("SIMILARITY_MAX_TEXTS")
+        await assert_serves(session)
+        await assert_rejected(session, {"texts_a": ["a", 1]}, "texts_a.1")
+        await assert_serves(session)
+        await assert_rejected(session, {"texts_a": 5}, "texts_a")
+        await assert_serves(session)
+        await assert_rejected(session, {}, "texts_a")
+        await assert_serves(session)
+        await assert_error_data(
+            session, {"texts_a": ["boom"]}, "embedding failed: model crashed"
+        )
+        await assert_serves(session)
+        await assert_error_data(
+            session, {"texts_a": ["mid"]}, "embedding failed: stream broke"
+        )
+        await assert_serves(session)
+        await assert_error_data(
+            session,
+            {"texts_a": ["short", "a", "b"]},
+            "embedding failed: expected 3 vectors, got 1",
+        )
+        await assert_serves(session)
+        monkeypatch.setenv("EMBEDDING_MODEL", "org/broken")
+        await assert_error_data(
+            session, {"texts_a": ["a"]}, "embedding failed: disk is full"
+        )
+        monkeypatch.delenv("EMBEDDING_MODEL")
+        await assert_serves(session)
+
+    fastembed = types.SimpleNamespace(TextEmbedding=text_embedding)
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    in_session(scenario)
+
+
+def test_no_text_logged(monkeypatch, capfd, caplog):
+    sentinel = "sentinel-input-text"
+
+    def constant_embed(texts):
+        return (np.array([1.0, 0.0]) for _ in texts)
+
+    def quoting_embed(texts):
+        raise RuntimeError(f"cannot read {texts}")
+
+    # invariant: the level the server itself configures, so records match production.
+    caplog.set_level(similarity_mcp.mcp.settings.log_level)
+    use_embedder(monkeypatch, constant_embed)
+    success = call_over_wire({"texts_a": [sentinel]})
+    blank = call_over_wire({"texts_a": [sentinel, " "]})
+    rejected = call_over_wire({"texts_a": [sentinel, 1]})
+    use_embedder(monkeypatch, scripted_embed)
+    failed = call_over_wire({"texts_a": [sentinel, "boom"]})
+    use_embedder(monkeypatch, quoting_embed)
+    call_over_wire({"texts_a": [sentinel]})
+    captured = capfd.readouterr()
+    assert "Processing request of type CallToolRequest" in caplog.text
+    assert sentinel not in caplog.text
+    assert sentinel not in captured.out
+    assert sentinel not in captured.err
+    assert json.loads(success.content[0].text)["matrix"] == [[1.0]]
+    assert blank.content[0].text == '{"error":"texts_a[1] is blank"}'
+    assert sentinel not in rejected.content[0].text
+    assert failed.content[0].text == '{"error":"embedding failed: model crashed"}'

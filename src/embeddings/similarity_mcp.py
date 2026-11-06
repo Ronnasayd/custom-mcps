@@ -153,7 +153,15 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
         return _compact_json({"error": problem})
     texts = texts_a if texts_b is None else texts_a + texts_b
     model = _model_name()
-    vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
+    try:
+        # hazard: embed may return a lazy generator, so list() must stay in this try.
+        vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
+    # why: a model fails in many ways, and each one must reach the client as data.
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return _compact_json({"error": f"embedding failed: {exc}"})
+    if len(vectors) != len(texts):
+        count_problem = f"expected {len(texts)} vectors, got {len(vectors)}"
+        return _compact_json({"error": f"embedding failed: {count_problem}"})
     unit = _normalized(vectors)
     columns = unit if texts_b is None else unit[len(texts_a) :]
     matrix = np.round(unit[: len(texts_a)] @ columns.T, SCORE_DECIMALS).tolist()
