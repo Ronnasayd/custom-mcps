@@ -684,3 +684,64 @@ def test_no_text_logged(monkeypatch, capfd, caplog):
     assert blank.content[0].text == '{"error":"texts_a[1] is blank"}'
     assert sentinel not in rejected.content[0].text
     assert failed.content[0].text == '{"error":"embedding failed: model crashed"}'
+
+
+def read_readme():
+    return (ROOT / "README.md").read_text()
+
+
+def readme_section(start, end="\n## "):
+    return read_readme().split(start, 1)[1].split(end, 1)[0]
+
+
+def test_readme_row():
+    lines = read_readme().splitlines()
+    row = next(line for line in lines if line.startswith("| `similarity-mcp`"))
+    _, command, tool, database, variables, _ = row.split("|")
+    assert command.strip() == "`similarity-mcp`"
+    assert tool.strip() == "`similarity_matrix`"
+    assert database.strip() == "-"
+    assert "`EMBEDDING_MODEL`" in variables
+    assert "`SIMILARITY_MAX_TEXTS`" in variables
+    assert "`FASTEMBED_CACHE_PATH`" in variables
+
+
+def test_readme_section():
+    section = readme_section("### `similarity-mcp`")
+    assert "similarity_matrix(texts_a, texts_b=None)" in section
+    assert "One list: omit `texts_b`" in section
+    assert "Two lists: pass `texts_b`" in section
+    assert "`matrix`" in section
+    assert "`model`" in section
+    assert "300 texts" in section
+    assert "`SIMILARITY_MAX_TEXTS`" in section
+    assert "first 128 tokens" in section
+    assert "241 MB" in section
+    assert "exits with a non-zero status" in section
+    assert (
+        "--directory /path/to/custom-mcps --extra embeddings similarity-mcp" in section
+    )
+    assert "`EMBEDDING_MODEL`" in section
+    assert "`FASTEMBED_CACHE_PATH`" in section
+    assert "`similarity-mcp: model ready`" in section
+    # why: SPEC_DEVIATION from design.md, measured on a pty: Ctrl+C leaves the
+    # server blocked on stdin, and Ctrl+D ends it with status 0.
+    assert "stop it with Ctrl+D" in section
+    assert "then register" in section
+
+
+def test_readme_layout():
+    assert "src/embeddings/\n  similarity_mcp.py\n" in readme_section("## Layout")
+
+
+def test_readme_security():
+    section = readme_section("## Security", "\n## Layout")
+    assert (
+        "`similarity-mcp` touches no database and contacts the network only "
+        "to download the model" in section
+    )
+
+
+def test_readme_opening():
+    opening = read_readme().split("\n\n")[1]
+    assert "text similarity server" in opening
