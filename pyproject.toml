@@ -17,12 +17,18 @@ dependencies = [
     "httpx==0.28.1",
 ]
 
+[project.optional-dependencies]
+embeddings = [
+    "fastembed==0.9.1",
+]
+
 [project.scripts]
 mongodb-mcp = "src.databases.mongodb_mcp:main"
 mysql-mcp = "src.databases.mysql_mcp:main"
 postgresql-mcp = "src.databases.postgresql_mcp:main"
 sqlite-mcp = "src.databases.sqlite_mcp:main"
 clef-mcp = "src.decision.clef_mcp:main"
+similarity-mcp = "src.embeddings.similarity_mcp:main"
 
 [tool.uv.build-backend]
 module-name = "src"
@@ -35,6 +41,12 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest==9.2.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not smoke'"
+markers = [
+    "smoke: needs the real model, a real process, or no network",
 ]
 
 [tool.mypy]
