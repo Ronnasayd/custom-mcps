@@ -35,9 +35,12 @@ def _max_texts() -> tuple[int, str | None]:
     value = os.environ.get("SIMILARITY_MAX_TEXTS", "").strip()
     if not value:
         return DEFAULT_MAX_TEXTS, None
-    if not value.isdecimal() or int(value) == 0:
-        return 0, "SIMILARITY_MAX_TEXTS must be a positive integer"
-    return int(value), None
+    invalid = 0, "SIMILARITY_MAX_TEXTS must be a positive integer"
+    try:
+        limit = int(value)
+    except ValueError:
+        return invalid
+    return (limit, None) if limit > 0 else invalid
 
 
 def _cache_dir() -> str:

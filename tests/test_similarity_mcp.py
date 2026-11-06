@@ -745,3 +745,17 @@ def test_readme_security():
 def test_readme_opening():
     opening = read_readme().split("\n\n")[1]
     assert "text similarity server" in opening
+
+
+def test_limit_with_plus_sign(fake_embedder, monkeypatch):
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "+2")
+    assert similarity(["a", "b"])["matrix"] == [[1.0, 0.0], [0.0, 1.0]]
+    assert similarity(["a", "b", "c"]) == {"error": "too many texts: 3 > 2"}
+
+
+def test_limit_too_long_to_parse(fake_embedder, monkeypatch):
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "1" + "0" * 5000)
+    assert similarity(["a"]) == {
+        "error": "SIMILARITY_MAX_TEXTS must be a positive integer"
+    }
+    assert fake_embedder == []
