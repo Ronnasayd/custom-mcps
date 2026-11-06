@@ -433,3 +433,36 @@ def test_two_list_matrix(fake_embedder):
 def test_two_list_one_embed_call(fake_embedder):
     similarity(["a", "b"], ["a", "b", "c"])
     assert fake_embedder == [["a", "b", "a", "b", "c"]]
+
+
+def test_empty_texts_a(fake_embedder):
+    assert similarity([]) == {"error": "texts_a must not be empty"}
+    assert fake_embedder == []
+
+
+def test_empty_texts_b(fake_embedder):
+    assert similarity(["a"], []) == {"error": "texts_b must not be empty"}
+    assert fake_embedder == []
+
+
+def test_blank_text(fake_embedder):
+    assert similarity(["a", ""]) == {"error": "texts_a[1] is blank"}
+    assert similarity(["a", "b", "c", " \t\n"]) == {"error": "texts_a[3] is blank"}
+    assert similarity(["a"], ["b", "  "]) == {"error": "texts_b[1] is blank"}
+    assert fake_embedder == []
+
+
+def test_bad_types_is_error(fake_embedder):
+    non_string_item = call_over_wire({"texts_a": ["a", 1]})
+    number_as_list = call_over_wire({"texts_a": 5})
+    number_as_texts_b = call_over_wire({"texts_a": ["a"], "texts_b": 5})
+    missing_texts_a = call_over_wire({})
+    assert non_string_item.isError is True
+    assert "texts_a.1" in non_string_item.content[0].text
+    assert number_as_list.isError is True
+    assert "texts_a" in number_as_list.content[0].text
+    assert number_as_texts_b.isError is True
+    assert "texts_b" in number_as_texts_b.content[0].text
+    assert missing_texts_a.isError is True
+    assert "texts_a" in missing_texts_a.content[0].text
+    assert fake_embedder == []

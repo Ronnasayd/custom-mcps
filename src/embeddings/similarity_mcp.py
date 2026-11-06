@@ -76,6 +76,41 @@ def _normalized(vectors: np.ndarray) -> np.ndarray:
     return vectors / norms
 
 
+def _compact_json(payload: dict[str, Any]) -> str:
+    """Serialize a response with no space after separators.
+
+    Args:
+        payload: The response object.
+
+    Returns:
+        The compact JSON text.
+    """
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _validate(texts_a: list[str], texts_b: list[str] | None) -> str | None:
+    """Find the first problem in the input lists.
+
+    Args:
+        texts_a: Texts of the matrix rows.
+        texts_b: Texts of the matrix columns, or None in one-list mode.
+
+    Returns:
+        The error message, or None when the input is valid.
+    """
+    lists = {"texts_a": texts_a}
+    if texts_b is not None:
+        lists["texts_b"] = texts_b
+    for name, texts in lists.items():
+        if not texts:
+            return f"{name} must not be empty"
+    for name, texts in lists.items():
+        for index, text in enumerate(texts):
+            if not text.strip():
+                return f"{name}[{index}] is blank"
+    return None
+
+
 @mcp.tool(structured_output=False)
 def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> str:
     """Score every pair of texts by cosine similarity, from -1.0 to 1.0.
@@ -95,13 +130,16 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     Returns:
         Compact JSON text: {"matrix": [[...]], "model": "<name>"}, or {"error": ...}.
     """
+    problem = _validate(texts_a, texts_b)
+    if problem:
+        return _compact_json({"error": problem})
     texts = texts_a if texts_b is None else texts_a + texts_b
     model = _model_name()
     vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
     unit = _normalized(vectors)
     columns = unit if texts_b is None else unit[len(texts_a) :]
     matrix = np.round(unit[: len(texts_a)] @ columns.T, SCORE_DECIMALS).tolist()
-    return json.dumps({"matrix": matrix, "model": model}, separators=(",", ":"))
+    return _compact_json({"matrix": matrix, "model": model})
 
 
 def main() -> None:
