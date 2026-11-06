@@ -6,9 +6,11 @@
 
 import asyncio
 import json
+import os
 import pathlib
 import subprocess
 import sys
+import threading
 import tomllib
 import types
 
@@ -29,6 +31,29 @@ VECTORS = {
     "f": [3, 1],
     "zero": [0, 0],
     "  a \n": [1, 0],
+}
+SERVER = [sys.executable, "-m", "src.embeddings.similarity_mcp"]
+OFFLINE = ["unshare", "-rn"]
+STDIO_LIMIT_SECONDS = 120
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "smoke", "version": "1"},
+    },
+}
+INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+CALL = {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+        "name": "similarity_matrix",
+        "arguments": {"texts_a": ["gato", "cat", "carro"]},
+    },
 }
 
 
@@ -304,3 +329,95 @@ def test_main_load_failure(run_calls, monkeypatch):
     assert "disk is full" in message
     assert DEFAULT_MODEL in message
     assert run_calls == []
+
+
+def send(process, *messages):
+    for message in messages:
+        process.stdin.write(json.dumps(message) + "\n")
+    process.stdin.flush()
+
+
+def talk_over_stdio(command, env):
+    with subprocess.Popen(
+        command,
+        cwd=ROOT,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as process:
+        watchdog = threading.Timer(STDIO_LIMIT_SECONDS, process.kill)
+        watchdog.start()
+        try:
+            send(process, INITIALIZE)
+            lines = [process.stdout.readline()]
+            send(process, INITIALIZED, CALL)
+            lines.append(process.stdout.readline())
+            process.stdin.close()
+            lines.extend(process.stdout.readlines())
+            process.wait()
+        finally:
+            watchdog.cancel()
+    return [json.loads(line) for line in lines]
+
+
+def assert_session_served(messages):
+    initialize, call = messages
+    assert initialize["jsonrpc"] == "2.0"
+    assert initialize["id"] == 1
+    assert initialize["result"]["serverInfo"]["name"] == "similarity_tool"
+    assert call["jsonrpc"] == "2.0"
+    assert call["id"] == 2
+    assert call["result"]["isError"] is False
+    body = json.loads(call["result"]["content"][0]["text"])
+    assert body["model"] == DEFAULT_MODEL
+    assert np.array(body["matrix"]).shape == (3, 3)
+
+
+# invariant: this first smoke test fills the default cache the warm start reads.
+@pytest.mark.smoke
+def test_smoke_score_order():
+    matrix = similarity(["gato", "cat", "carro"])["matrix"]
+    assert matrix[0][1] > matrix[0][2]
+
+
+@pytest.mark.smoke
+def test_smoke_real_scores():
+    matrix = np.array(similarity(["gato", "cat", "carro", "tax return"])["matrix"])
+    assert matrix.min() >= -1.0
+    assert matrix.max() <= 1.0
+    assert np.diag(matrix).tolist() == [1.0, 1.0, 1.0, 1.0]
+
+
+@pytest.mark.smoke
+def test_smoke_long_text():
+    out = similarity([" ".join(["palavra"] * 600), "curto"])
+    assert "error" not in out
+    assert np.array(out["matrix"]).shape == (2, 2)
+
+
+@pytest.mark.smoke
+def test_smoke_stdio_cold_cache(tmp_path):
+    env = {**os.environ, "FASTEMBED_CACHE_PATH": str(tmp_path)}
+    assert_session_served(talk_over_stdio(SERVER, env))
+
+
+@pytest.mark.smoke
+def test_smoke_offline_warm_start():
+    assert_session_served(talk_over_stdio(OFFLINE + SERVER, dict(os.environ)))
+
+
+@pytest.mark.smoke
+def test_smoke_offline_empty_cache_fails(tmp_path):
+    result = subprocess.run(
+        OFFLINE + SERVER,
+        cwd=ROOT,
+        env={**os.environ, "FASTEMBED_CACHE_PATH": str(tmp_path)},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=STDIO_LIMIT_SECONDS,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert DEFAULT_MODEL in result.stderr
