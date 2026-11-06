@@ -14,6 +14,7 @@ mcp = FastMCP(name="similarity_tool")
 
 DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_CACHE_DIR = "~/.cache/fastembed"
+DEFAULT_MAX_TEXTS = 300
 SCORE_DECIMALS = 4
 
 # invariant: None in production; tests set a fake here.
@@ -23,6 +24,20 @@ _embedder: Any = None  # pylint: disable=invalid-name
 def _model_name() -> str:
     """Return the EMBEDDING_MODEL value, or the default model when it is blank."""
     return os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_MODEL
+
+
+def _max_texts() -> tuple[int, str | None]:
+    """Read the text limit from SIMILARITY_MAX_TEXTS, where blank means unset.
+
+    Returns:
+        The limit and None, or 0 and the error message for an invalid value.
+    """
+    value = os.environ.get("SIMILARITY_MAX_TEXTS", "").strip()
+    if not value:
+        return DEFAULT_MAX_TEXTS, None
+    if not value.isdecimal() or int(value) == 0:
+        return 0, "SIMILARITY_MAX_TEXTS must be a positive integer"
+    return int(value), None
 
 
 def _cache_dir() -> str:
@@ -88,12 +103,13 @@ def _compact_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
-def _validate(texts_a: list[str], texts_b: list[str] | None) -> str | None:
+def _validate(texts_a: list[str], texts_b: list[str] | None, limit: int) -> str | None:
     """Find the first problem in the input lists.
 
     Args:
         texts_a: Texts of the matrix rows.
         texts_b: Texts of the matrix columns, or None in one-list mode.
+        limit: Highest text count across both lists.
 
     Returns:
         The error message, or None when the input is valid.
@@ -108,7 +124,8 @@ def _validate(texts_a: list[str], texts_b: list[str] | None) -> str | None:
         for index, text in enumerate(texts):
             if not text.strip():
                 return f"{name}[{index}] is blank"
-    return None
+    count = sum(len(texts) for texts in lists.values())
+    return f"too many texts: {count} > {limit}" if count > limit else None
 
 
 @mcp.tool(structured_output=False)
@@ -130,7 +147,8 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     Returns:
         Compact JSON text: {"matrix": [[...]], "model": "<name>"}, or {"error": ...}.
     """
-    problem = _validate(texts_a, texts_b)
+    limit, problem = _max_texts()
+    problem = problem or _validate(texts_a, texts_b, limit)
     if problem:
         return _compact_json({"error": problem})
     texts = texts_a if texts_b is None else texts_a + texts_b

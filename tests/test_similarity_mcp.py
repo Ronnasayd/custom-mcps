@@ -466,3 +466,55 @@ def test_bad_types_is_error(fake_embedder):
     assert missing_texts_a.isError is True
     assert "texts_a" in missing_texts_a.content[0].text
     assert fake_embedder == []
+
+
+def test_too_many_texts(fake_embedder):
+    assert similarity(["a"] * 150, ["b"] * 151) == {
+        "error": "too many texts: 301 > 300"
+    }
+    assert similarity(["a"] * 301) == {"error": "too many texts: 301 > 300"}
+    assert fake_embedder == []
+
+
+def test_limit_exact(fake_embedder):
+    two_lists = similarity(["a"] * 100, ["b"] * 200)
+    one_list = similarity(["a"] * 300)
+    assert np.array(two_lists["matrix"]).shape == (100, 200)
+    assert np.array(one_list["matrix"]).shape == (300, 300)
+
+
+def test_default_limit(fake_embedder, monkeypatch):
+    too_many = {"error": "too many texts: 301 > 300"}
+    assert similarity(["a"] * 301) == too_many
+    assert np.array(similarity(["a"] * 300)["matrix"]).shape == (300, 300)
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "   ")
+    assert similarity(["a"] * 301) == too_many
+    assert np.array(similarity(["a"] * 300)["matrix"]).shape == (300, 300)
+
+
+def test_limit_from_env(fake_embedder, monkeypatch):
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "2")
+    assert similarity(["a", "b", "c"]) == {"error": "too many texts: 3 > 2"}
+    assert similarity(["a", "b"], ["c"]) == {"error": "too many texts: 3 > 2"}
+    assert similarity(["a"], ["c"])["matrix"] == [[-1.0]]
+    assert similarity(["a", "b"])["matrix"] == [[1.0, 0.0], [0.0, 1.0]]
+
+
+def test_invalid_limit(fake_embedder, monkeypatch):
+    invalid = {"error": "SIMILARITY_MAX_TEXTS must be a positive integer"}
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "many")
+    assert similarity(["a"]) == invalid
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "0")
+    assert similarity(["a"]) == invalid
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "-5")
+    assert similarity(["a"]) == invalid
+    assert fake_embedder == []
+
+
+def test_first_problem_reported(fake_embedder, monkeypatch):
+    assert similarity(["a"] * 301 + [" "]) == {"error": "texts_a[301] is blank"}
+    assert similarity([" "], []) == {"error": "texts_b must not be empty"}
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "none")
+    assert similarity([]) == {
+        "error": "SIMILARITY_MAX_TEXTS must be a positive integer"
+    }
