@@ -421,3 +421,15 @@ def test_smoke_offline_empty_cache_fails(tmp_path):
     )
     assert result.returncode != 0
     assert DEFAULT_MODEL in result.stderr
+
+
+def test_two_list_matrix(fake_embedder):
+    assert similarity(["a", "b"], ["a", "b", "c"])["matrix"] == [
+        [1, 0, -1],
+        [0, 1, 0],
+    ]
+
+
+def test_two_list_one_embed_call(fake_embedder):
+    similarity(["a", "b"], ["a", "b", "c"])
+    assert fake_embedder == [["a", "b", "a", "b", "c"]]

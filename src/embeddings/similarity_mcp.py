@@ -95,12 +95,12 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
     Returns:
         Compact JSON text: {"matrix": [[...]], "model": "<name>"}, or {"error": ...}.
     """
-    # why: the two-list branch lands next; the published signature is already final.
-    del texts_b
+    texts = texts_a if texts_b is None else texts_a + texts_b
     model = _model_name()
-    vectors = np.array(list(_get_embedder(model).embed(texts_a)), dtype=np.float64)
+    vectors = np.array(list(_get_embedder(model).embed(texts)), dtype=np.float64)
     unit = _normalized(vectors)
-    matrix = np.round(unit @ unit.T, SCORE_DECIMALS).tolist()
+    columns = unit if texts_b is None else unit[len(texts_a) :]
+    matrix = np.round(unit[: len(texts_a)] @ columns.T, SCORE_DECIMALS).tolist()
     return json.dumps({"matrix": matrix, "model": model}, separators=(",", ":"))
 
 
