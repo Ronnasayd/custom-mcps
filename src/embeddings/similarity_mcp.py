@@ -5,10 +5,11 @@ import functools
 import json
 import os
 import sys
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 import numpy as np
+from pydantic import ValidatorFunctionWrapHandler, WrapValidator
 
 mcp = FastMCP(name="similarity_tool")
 
@@ -16,6 +17,8 @@ DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_CACHE_DIR = "~/.cache/fastembed"
 DEFAULT_MAX_TEXTS = 300
 SCORE_DECIMALS = 4
+
+TextSource = list[str] | str
 
 # invariant: None in production; tests set a fake here.
 _embedder: Any = None  # pylint: disable=invalid-name
@@ -106,6 +109,68 @@ def _compact_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+def _keep_path(value: object, to_list: ValidatorFunctionWrapHandler) -> TextSource:
+    """Let a path through, and validate anything else as a list of texts.
+
+    Args:
+        value: The raw argument.
+        to_list: The pydantic validator of the list.
+
+    Returns:
+        The path, or the validated list.
+    """
+    return value if isinstance(value, str) else to_list(value)
+
+
+# why: a plain union quotes the whole list in its str branch error, and a rejected
+# call must not echo texts; this one keeps the list error and the union schema.
+TextsArg = Annotated[
+    list[str], WrapValidator(_keep_path, json_schema_input_type=TextSource)
+]
+
+
+def _absolute_path(path: str) -> str:
+    """Expand "~" and anchor a relative path at the server working directory.
+
+    Args:
+        path: The path a client sent.
+
+    Returns:
+        The absolute path.
+    """
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def _load_texts(source: TextSource, name: str) -> list[str]:
+    """Return the texts of an argument, reading a path as a JSON file.
+
+    Args:
+        source: The texts, or the path of a JSON file holding them.
+        name: Name of the argument, for error messages.
+
+    Returns:
+        The texts.
+
+    Raises:
+        ValueError: If the path is blank or the file does not hold such an array.
+    """
+    if not isinstance(source, str):
+        return source
+    if not source.strip():
+        raise ValueError(f"{name} is blank")
+    path = _absolute_path(source)
+    try:
+        with open(path, encoding="utf-8") as file:
+            texts = json.load(file)
+    # why: ValueError covers bad JSON, bad UTF-8 and a NUL byte in the path, and a
+    # too deep array raises RecursionError; each one must reach the client as data.
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ValueError(f"cannot read {name}: {exc}") from exc
+    if isinstance(texts, list) and all(isinstance(text, str) for text in texts):
+        return texts
+    raise ValueError(f"{name} must be a JSON array of strings: {path}")
+
+
 def _validate(texts_a: list[str], texts_b: list[str] | None, limit: int) -> str | None:
     """Find the first problem in the input lists.
 
@@ -131,8 +196,8 @@ def _validate(texts_a: list[str], texts_b: list[str] | None, limit: int) -> str 
     return f"too many texts: {count} > {limit}" if count > limit else None
 
 
-def _scores(texts_a: list[str], texts_b: list[str] | None) -> dict[str, Any]:
-    """Score every pair of texts by cosine similarity.
+def _cosine_matrix(texts_a: list[str], texts_b: list[str] | None) -> dict[str, Any]:
+    """Embed valid texts and score every pair by cosine similarity.
 
     Args:
         texts_a: Texts of the matrix rows.
@@ -141,10 +206,6 @@ def _scores(texts_a: list[str], texts_b: list[str] | None) -> dict[str, Any]:
     Returns:
         {"matrix": [[...]], "model": "<name>"}, or {"error": "<message>"}.
     """
-    limit, problem = _max_texts()
-    problem = problem or _validate(texts_a, texts_b, limit)
-    if problem:
-        return {"error": problem}
     texts = texts_a if texts_b is None else texts_a + texts_b
     model = _model_name()
     try:
@@ -162,22 +223,46 @@ def _scores(texts_a: list[str], texts_b: list[str] | None) -> dict[str, Any]:
     return {"matrix": matrix, "model": model}
 
 
+def _scores(texts_a: TextSource, texts_b: TextSource | None) -> dict[str, Any]:
+    """Load, validate and score the texts of a call.
+
+    Args:
+        texts_a: Texts of the matrix rows, or the path of a JSON file holding them.
+        texts_b: The same for the matrix columns, or None in one-list mode.
+
+    Returns:
+        {"matrix": [[...]], "model": "<name>"}, or {"error": "<message>"}.
+    """
+    limit, problem = _max_texts()
+    if problem:
+        return {"error": problem}
+    try:
+        rows = _load_texts(texts_a, "texts_a")
+        columns = None if texts_b is None else _load_texts(texts_b, "texts_b")
+    except ValueError as exc:
+        return {"error": str(exc)}
+    problem = _validate(rows, columns, limit)
+    return {"error": problem} if problem else _cosine_matrix(rows, columns)
+
+
 @mcp.tool(structured_output=False)
-def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> str:
+def similarity_matrix(texts_a: TextsArg, texts_b: TextsArg | None = None) -> str:
     """Score every pair of texts by cosine similarity, from -1.0 to 1.0.
 
     A row or column of `matrix` is the position of a text in the input lists.
     Rows follow texts_a and columns follow texts_b.
     Omitting texts_b compares texts_a with itself.
     A string holding a JSON array is read as that list, and "null" as null.
-    The default limit is 300 texts across both lists.
-    A bad call returns {"error": "<message>"}.
+    Any other string is the path of a JSON file holding an array of strings.
+    A path has "~" expanded, and a relative one follows the server working directory.
+    The default limit is 300 texts across both lists, counting those read from files.
+    A bad call or an unreadable file returns {"error": "<message>"}.
     A text whose embedding has zero norm scores 0.0 on all its cells.
-    The default model reads only the first 128 tokens of a text.
 
     Args:
-        texts_a: Texts of the matrix rows.
-        texts_b: Texts of the matrix columns; omit to compare texts_a with itself.
+        texts_a: Texts of the matrix rows, or the path of a JSON file holding them.
+        texts_b: Texts of the matrix columns, or the path of a JSON file holding
+            them; omit to compare texts_a with itself.
 
     Returns:
         Compact JSON text: {"matrix": [[...]], "model": "<name>"}, or {"error": ...}.
@@ -187,7 +272,7 @@ def similarity_matrix(texts_a: list[str], texts_b: list[str] | None = None) -> s
 
 @mcp.tool(structured_output=False)
 def similarity_matrix_csv(
-    texts_a: list[str], output_path: str, texts_b: list[str] | None = None
+    texts_a: TextsArg, output_path: str, texts_b: TextsArg | None = None
 ) -> str:
     """Save the similarity_matrix scores to a CSV file and return only its path.
 
@@ -199,10 +284,11 @@ def similarity_matrix_csv(
     A bad call returns {"error": "<message>"} and writes nothing.
 
     Args:
-        texts_a: Texts of the matrix rows.
+        texts_a: Texts of the matrix rows, or the path of a JSON file holding them.
         output_path: CSV file to write; "~" expands, and a relative path follows
             the working directory of the server.
-        texts_b: Texts of the matrix columns; omit to compare texts_a with itself.
+        texts_b: Texts of the matrix columns, or the path of a JSON file holding
+            them; omit to compare texts_a with itself.
 
     Returns:
         Compact JSON text: {"path": "<absolute path>"}, or {"error": ...}.
@@ -212,7 +298,7 @@ def similarity_matrix_csv(
     result = _scores(texts_a, texts_b)
     if "error" in result:
         return _compact_json(result)
-    path = os.path.abspath(os.path.expanduser(output_path))
+    path = _absolute_path(output_path)
     try:
         np.savetxt(path, result["matrix"], fmt=f"%.{SCORE_DECIMALS}f", delimiter=",")
     # why: ValueError covers a NUL byte in the path, which open rejects before the OS.

@@ -76,6 +76,8 @@ Wraps the hosted Clef models on Cloudflare Workers AI. Every tool returns the re
 
 A string holding a JSON array is read as that list, and the string `null` as `null`: `texts_a='["x","y"]'` returns a matrix, and `texts_b='null'` selects one-list mode.
 
+Any other string is the path of a JSON file holding an array of strings, so a client can point at a long list without sending it. `texts_a="/tmp/a.json"` reads that file, and the two forms mix, such as a list in `texts_a` and a path in `texts_b`. `~` expands, and a relative path follows the working directory of the server. The texts of a file pass the same checks as a list and count toward the same limit. A missing or unreadable file, invalid JSON, or content that is not an array of strings returns `{"error": "..."}`. A path that is itself valid JSON is read as JSON, so write a file named `null` as `./null`.
+
 The response is compact JSON with the fields `matrix` and `model`, such as `{"matrix":[[1.0,0.9909],[0.9909,1.0]],"model":"<model name>"}`. A cell's position is the index of its texts in the input lists. A bad call returns `{"error": "..."}` and the server keeps serving.
 
 `similarity_matrix_csv(texts_a, output_path, texts_b=None)` takes the same texts and follows the same rules, but saves the scores to a CSV file and returns only its absolute path, such as `{"path":"/tmp/scores.csv"}`. The CSV has no header: line `i` is `texts_a[i]`, column `j` is `texts_b[j]`, and each score has 4 decimal places. It overwrites an existing file, and the parent directory must already exist. `~` expands, and a relative path follows the working directory of the server.
@@ -98,7 +100,7 @@ A client can give up while the first download runs, so fetch the model from a te
 
 ## Security (read-only databases)
 
-The database servers are read-only; `clef-mcp` talks only to the Cloudflare API and touches no database. `similarity-mcp` touches no database and contacts the network only to download the model. `similarity_matrix_csv` writes to any path the server process can write to.
+The database servers are read-only; `clef-mcp` talks only to the Cloudflare API and touches no database. `similarity-mcp` touches no database and contacts the network only to download the model. `similarity_matrix_csv` writes to any path the server process can write to. `similarity-mcp` reads only the JSON files a call names, from any path the server process can read, and returns scores, not their content.
 
 Protection is enforced on the database session, not only on the query:
 

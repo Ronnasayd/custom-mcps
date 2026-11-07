@@ -3,6 +3,8 @@
 # why: pytest fixtures are injected by parameter name, and tests are docstring-exempt.
 # pylint: disable=redefined-outer-name,missing-function-docstring,unused-argument
 # pylint: disable=protected-access
+# why: one suite per server; a split would only move the shared fixtures around.
+# pylint: disable=too-many-lines
 
 import asyncio
 import json
@@ -183,7 +185,7 @@ def test_tool_description():
     assert "limit is 300" in description
     assert '{"error"' in description
     assert "zero norm scores 0.0" in description
-    assert "first 128 tokens" in description
+    assert "128 tokens" not in description
 
 
 def test_zero_norm(fake_embedder):
@@ -880,3 +882,224 @@ def test_smoke_csv(tmp_path):
     scores = np.loadtxt(path, delimiter=",")
     assert scores.shape == (3, 3)
     assert scores[0][1] > scores[0][2]
+
+
+def write_texts(path, texts):
+    path.write_text(json.dumps(texts), encoding="utf-8")
+    return str(path)
+
+
+def test_list_input_unchanged(fake_embedder):
+    result = call_over_wire({"texts_a": ["a", "b"], "texts_b": ["c", "d"]})
+    assert json.loads(result.content[0].text)["matrix"] == [[-1.0, 0.6], [0.0, 0.8]]
+    assert fake_embedder == [["a", "b", "c", "d"]]
+
+
+def test_path_in_texts_a(fake_embedder, tmp_path):
+    path = write_texts(tmp_path / "a.json", ["a", "b"])
+    assert similarity(path) == similarity(["a", "b"])
+    assert fake_embedder == [["a", "b"]] * 2
+
+
+def test_path_in_texts_b(fake_embedder, tmp_path):
+    path = write_texts(tmp_path / "b.json", ["c", "d"])
+    assert similarity(["a", "b"], path)["matrix"] == [[-1.0, 0.6], [0.0, 0.8]]
+
+
+def test_path_in_both(fake_embedder, tmp_path):
+    rows = write_texts(tmp_path / "a.json", ["a", "b"])
+    columns = write_texts(tmp_path / "b.json", ["c", "d"])
+    assert similarity(rows, columns)["matrix"] == [[-1.0, 0.6], [0.0, 0.8]]
+    assert fake_embedder == [["a", "b", "c", "d"]]
+
+
+def test_path_mixed_with_list(fake_embedder, tmp_path):
+    path = write_texts(tmp_path / "texts.json", ["c", "d"])
+    assert similarity(path, ["a", "b"])["matrix"] == [[-1.0, 0.0], [0.6, 0.8]]
+    assert fake_embedder == [["c", "d", "a", "b"]]
+
+
+def test_path_expands_home(fake_embedder, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    write_texts(tmp_path / "texts.json", ["a", "b"])
+    assert similarity("~/texts.json")["matrix"] == [[1.0, 0.0], [0.0, 1.0]]
+
+
+def test_path_relative_follows_cwd(fake_embedder, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_texts(tmp_path / "texts.json", ["a", "b"])
+    assert similarity("texts.json")["matrix"] == [[1.0, 0.0], [0.0, 1.0]]
+
+
+def test_path_read_as_utf8(tmp_path, monkeypatch):
+    seen = []
+
+    def embed(texts):
+        seen.extend(texts)
+        return (np.array([1.0, 0.0]) for _ in texts)
+
+    use_embedder(monkeypatch, embed)
+    path = tmp_path / "texts.json"
+    path.write_bytes('["olá"]'.encode())
+    assert similarity(str(path))["matrix"] == [[1.0]]
+    assert seen == ["olá"]
+
+
+def test_path_over_wire(fake_embedder, tmp_path):
+    rows = write_texts(tmp_path / "a.json", ["a", "b"])
+    result = call_over_wire({"texts_a": rows, "texts_b": ["c", "d"]})
+    assert result.isError is False
+    assert json.loads(result.content[0].text)["matrix"] == [[-1.0, 0.6], [0.0, 0.8]]
+
+
+def test_csv_with_path(fake_embedder, tmp_path):
+    rows = write_texts(tmp_path / "a.json", ["a", "b"])
+    out = tmp_path / "scores.csv"
+    result = call_over_wire(
+        {"texts_a": rows, "output_path": str(out), "texts_b": ["c", "d"]},
+        "similarity_matrix_csv",
+    )
+    assert json.loads(result.content[0].text) == {"path": str(out)}
+    assert out.read_text() == "-1.0000,0.6000\n0.0000,0.8000\n"
+
+
+def test_schema_offers_list_or_path():
+    list_or_path = [{"items": {"type": "string"}, "type": "array"}, {"type": "string"}]
+    for tool in asyncio.run(similarity_mcp.mcp.list_tools()):
+        properties = tool.inputSchema["properties"]
+        assert properties["texts_a"]["anyOf"] == list_or_path
+        assert properties["texts_b"]["anyOf"] == [*list_or_path, {"type": "null"}]
+
+
+def test_bad_list_error_keeps_its_shape(fake_embedder):
+    text = call_over_wire({"texts_a": ["sentinel", 1]}).content[0].text
+    assert "1 validation error" in text
+    assert "texts_a.1\n" in text
+    assert "sentinel" not in text
+
+
+def test_missing_file(fake_embedder, tmp_path):
+    path = str(tmp_path / "missing.json")
+    message = similarity(path)["error"]
+    assert message.startswith("cannot read texts_a: ")
+    assert path in message
+    assert similarity(["a"], path)["error"].startswith("cannot read texts_b: ")
+    assert fake_embedder == []
+
+
+def test_invalid_json(fake_embedder, tmp_path):
+    path = tmp_path / "texts.json"
+    path.write_text('["sentinel", oops]')
+    message = similarity(str(path))["error"]
+    assert message.startswith("cannot read texts_a: ")
+    assert "sentinel" not in message
+    assert fake_embedder == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"sentinel": 1}', '"sentinel"', "5", "null", '["sentinel", 1]', '[["sentinel"]]'],
+)
+def test_json_not_array_of_strings(fake_embedder, tmp_path, content):
+    path = tmp_path / "texts.json"
+    path.write_text(content)
+    assert similarity(["a"], str(path)) == {
+        "error": f"texts_b must be a JSON array of strings: {path}"
+    }
+    assert fake_embedder == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+def test_permission_denied(fake_embedder, tmp_path):
+    path = tmp_path / "texts.json"
+    path.write_text('["a"]')
+    path.chmod(0)
+    assert "Permission denied" in similarity(str(path))["error"]
+    assert fake_embedder == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"\xff\xfe", b"[" * 200_000, b"[" + b"1" * 5000 + b"]"],
+    ids=["not-utf8", "too-deep", "number-too-long"],
+)
+def test_unreadable_content(fake_embedder, tmp_path, content):
+    path = tmp_path / "texts.json"
+    path.write_bytes(content)
+    assert similarity(str(path))["error"].startswith("cannot read texts_a: ")
+
+
+@pytest.mark.parametrize("name", [".", "bad\0name.json"])
+def test_unreadable_path(fake_embedder, tmp_path, name):
+    assert similarity(f"{tmp_path}/{name}")["error"].startswith("cannot read texts_a: ")
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_path(fake_embedder, blank):
+    assert similarity(blank) == {"error": "texts_a is blank"}
+    assert similarity(["a"], blank) == {"error": "texts_b is blank"}
+    assert fake_embedder == []
+
+
+def test_file_texts_share_validation(fake_embedder, tmp_path, monkeypatch):
+    assert similarity(write_texts(tmp_path / "a.json", [])) == {
+        "error": "texts_a must not be empty"
+    }
+    assert similarity(["a"], write_texts(tmp_path / "b.json", ["a", " "])) == {
+        "error": "texts_b[1] is blank"
+    }
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "2")
+    assert similarity(["a"], write_texts(tmp_path / "c.json", ["a", "b"])) == {
+        "error": "too many texts: 3 > 2"
+    }
+    assert fake_embedder == []
+
+
+def test_limit_error_comes_before_reading(fake_embedder, tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMILARITY_MAX_TEXTS", "none")
+    assert similarity(str(tmp_path / "missing.json")) == {
+        "error": "SIMILARITY_MAX_TEXTS must be a positive integer"
+    }
+
+
+def test_csv_bad_file_writes_nothing(fake_embedder, tmp_path):
+    out = tmp_path / "scores.csv"
+    missing = str(tmp_path / "missing.json")
+    message = similarity_csv(missing, str(out))["error"]
+    assert message.startswith("cannot read texts_a: ")
+    assert not out.exists()
+
+
+def test_read_errors_are_data_over_wire(fake_embedder, tmp_path):
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("oops")
+
+    async def scenario(session):
+        for path in (str(tmp_path / "missing.json"), str(bad_json), "5"):
+            result = await call_tool(session, {"texts_a": path})
+            assert result.isError is False
+            body = json.loads(result.content[0].text)
+            assert body["error"].startswith("cannot read texts_a: ")
+            await assert_serves(session)
+
+    in_session(scenario)
+
+
+def test_path_input_documented():
+    section = readme_section("### `similarity-mcp`", "\n### ")
+    for tool in asyncio.run(similarity_mcp.mcp.list_tools()):
+        assert "path of a JSON file" in tool.description
+    assert "path of a JSON file holding an array of strings" in section
+    assert "`./null`" in section
+
+
+def test_file_reads_in_security_section():
+    section = readme_section("## Security", "\n## Layout")
+    assert "reads only the JSON files a call names" in section
+
+
+@pytest.mark.smoke
+def test_smoke_path(tmp_path):
+    path = write_texts(tmp_path / "texts.json", ["gato", "cat", "carro"])
+    matrix = similarity(path)["matrix"]
+    assert matrix[0][1] > matrix[0][2]
